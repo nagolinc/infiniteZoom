@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Infinite Zoom</title>
+    <script>
+
+        let currentTiles
+        let drawTiles
+        let canvas
+
+        window.onload = function () {
+
+            canvas = document.getElementById('myCanvas');
+
+            function resizeCanvas() {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight - 50;
+            }
+
+            // initial resize
+            resizeCanvas();
+
+            // resize the canvas to fill browser window dynamically
+            window.addEventListener('resize', resizeCanvas);
+
+
+
+            let ctx = canvas.getContext('2d');
+
+            currentTiles = [{ "base64": "base64image1", "x": 0, "y": 0, "size": 256 }];
+            let zoomLevel = 1;
+            let pendingUpscale = new Set();
+
+            let minScreenSize = 32; // Set your minimum size in pixels
+            //let tooBigSize = 512; //how big an image has to be to get upscaled
+            //make tooBigSize 1/2 of the canvas size (min of width/height)
+            let tooBigSize = Math.min(canvas.width, canvas.height) / 2;
+
+            let camera = {
+                x: 0,
+                y: 0,
+                zoom: 1,
+            };
+
+            function filterVisibleTiles() {
+                return currentTiles.filter(tile => {
+                    const screenX = (tile.x * camera.zoom) - camera.x;
+                    const screenY = (tile.y * camera.zoom) - camera.y;
+                    const screenSize = tile.size * camera.zoom;
+
+                    let tooSmall = screenSize < minScreenSize;
+
+                    return (screenX + screenSize > 0 && screenX < canvas.width) &&
+                        (screenY + screenSize > 0 && screenY < canvas.height) && !tooSmall;
+                });
+            }
+
+
+            function checkAndUpdateTiles() {
+                const toUpscale = [];
+                const visibleTiles = filterVisibleTiles();
+                const minSizeInPixels = 512; // Set your minimum size in pixels
+                const screenCenter = { x: canvas.width / 2, y: canvas.height / 2 };
+
+                visibleTiles.forEach(tile => {
+
+
+                    //if less than half of a tile (horizontally or vertically) is on the screen, continue
+                    let centerX = (tile.x * camera.zoom) - camera.x + (tile.size * camera.zoom) / 2;
+                    let centerY = (tile.y * camera.zoom) - camera.y + (tile.size * camera.zoom) / 2;
+                    if (centerX < 0 || centerX > canvas.width || centerY < 0 || centerY > canvas.height) {
+                        return;
+                    }
+
+                    let pending = pendingUpscale.has(`${tile.x},${tile.y},${tile.size}`); //check if the tile is pending upscale
+                    let tooBig = tile.size * camera.zoom > tooBigSize;
+
+                    //check if the tile is pending upscale and whether tileSize*zoom is greater than minSizeInPixels
+                    if (!pending && tooBig) {
+
+                        const tileKey = `${tile.x},${tile.y},${tile.size}`;
+
+                        // Mark as pending upscale
+                        pendingUpscale.add(tileKey);
+
+                        // Compute the distance to screen center
+                        let tileCenterScreenX = (tile.x * camera.zoom) - camera.x + (tile.size * camera.zoom) / 2;
+                        let tileCenterScreenY = (tile.y * camera.zoom) - camera.y + (tile.size * camera.zoom) / 2;
+                        let canvasCenterX = canvas.width / 2;
+                        let canvasCenterY = canvas.height / 2;
+                        tile.distanceToCenter = Math.sqrt(Math.pow(tileCenterScreenX - canvasCenterX,2) + Math.pow(tileCenterScreenY - canvasCenterY,2));
+
+                        toUpscale.push(tile);
+                    }
+                });
+
+                if (toUpscale.length > 0) {
+                    // Sort tiles by distance to center
+                    toUpscale.sort((a, b) => a.distanceToCenter - b.distanceToCenter);
+
+                    // Send the tiles to the server for upscaling
+                    for (let i = 0; i < toUpscale.length; i++) {
+                        const tile = toUpscale[i];
+                        upscaleTile(tile);
+                    }
+                }
+            }
+
+
+            function upscaleTile(tile) {
+
+                console.log("upscaleTile called", tile);
+
+
+                fetch("/upscale", {
+                    method: "POST",
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        id: tile.id,  // Include the id here
+                        path: tile.path, // Include the path here
+                    })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        // Assume data.tiles contains the array of new relative paths for the tiles
+                        const newTilePaths = data.tiles;
+
+                        // Calculate new positions and sizes for the new tiles based on the original tile.
+                        const originalTile = tile;
+                        const newSize = originalTile.size / 2;
+                        const offsets = [
+                            { x: 0, y: 0 },
+                            { x: newSize, y: 0 },
+                            { x: 0, y: newSize },
+                            { x: newSize, y: newSize }
+                        ];
+
+                        // Create new tile objects and add them to currentTiles
+                        newTilePaths.forEach((path, index) => {
+                            const newTile = {
+                                id: `${tile.id}_${index}`, // Create a new ID for the tile
+                                x: originalTile.x + offsets[index].x,
+                                y: originalTile.y + offsets[index].y,
+                                size: newSize,
+                                path: path // Path received from the server
+                            };
+                            currentTiles.push(newTile);
+                        });
+
+                        // Redraw the tiles
+                        drawTiles();
+                    });
+
+
+            }
+
+            function handleScroll(event) {
+                const zoomFactor = event.deltaY < 0 ? 1.1 : 0.9;
+                const rect = canvas.getBoundingClientRect();
+                const mouseX = event.clientX - rect.left;
+                const mouseY = event.clientY - rect.top;
+
+                //find the world coordinates of the mouse under the old zoom
+                const worldMouseX = (mouseX + camera.x) / camera.zoom;
+                const worldMouseY = (mouseY + camera.y) / camera.zoom;
+
+                camera.zoom *= zoomFactor;
+
+                //find the world coordinates of the mouse under the new zoom
+                const newWorldMouseX = (mouseX + camera.x) / camera.zoom;
+                const newWorldMouseY = (mouseY + camera.y) / camera.zoom;
+
+                //adjust our camera coordinates to keep the world coordinates of the mouse the same
+                camera.x += (worldMouseX - newWorldMouseX) * camera.zoom;
+                camera.y += (worldMouseY - newWorldMouseY) * camera.zoom;
+
+                drawTiles();
+                checkAndUpdateTiles();
+            }
+
+
+
+            let imageCache = new Map();  // To cache decoded images
+
+            drawTiles = function () {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                const sortedTiles = filterVisibleTiles().sort((a, b) => b.size - a.size);
+
+                sortedTiles.forEach(tile => {
+                    const tileKey = `${tile.x},${tile.y},${tile.size}`;
+
+                    if (imageCache.has(tileKey)) {
+                        // Use the cached image
+                        const img = imageCache.get(tileKey);
+                        drawImage(img, tile);
+                        //for debuggin, draw a red border around the tile
+                        ctx.strokeStyle = "red";
+                        ctx.strokeRect((tile.x * camera.zoom) - camera.x, (tile.y * camera.zoom) - camera.y, tile.size * camera.zoom, tile.size * camera.zoom);
+
+                    } else {
+                        // Decode and cache the image
+                        const img = new Image();
+                        img.onload = () => {
+                            imageCache.set(tileKey, img);
+                            drawImage(img, tile);
+                            ctx.strokeStyle = "red";
+                            ctx.strokeRect((tile.x * camera.zoom) - camera.x, (tile.y * camera.zoom) - camera.y, tile.size * camera.zoom, tile.size * camera.zoom);
+                        };
+                        img.src = tile.path;
+                    }
+                });
+            }
+
+            function drawImage(img, tile) {
+                const screenX = (tile.x * camera.zoom) - camera.x;
+                const screenY = (tile.y * camera.zoom) - camera.y;
+                const screenSize = tile.size * camera.zoom;
+                ctx.drawImage(img, screenX, screenY, screenSize, screenSize);
+            }
+
+
+
+            function handleFileUpload(event) {
+
+                //clear current tiles and pendingUpscale
+                currentTiles = [];
+                pendingUpscale = new Set();
+                imageCache = new Map();
+
+                //reset camera
+                camera = {
+                    x: 0,
+                    y: 0,
+                    zoom: 1,
+                };
+
+                const file = event.target.files[0];
+                const formData = new FormData();
+                formData.append('file', file);
+
+                fetch("/upload", {
+                    method: "POST",
+                    body: formData
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        const imageId = data.id;
+                        //path
+                        const imgPath = data.path;
+                        // Add this ID to your tiles, so you can use it to request upscaling later
+                        currentTiles = [{ "id": imageId, "path": imgPath, "x": 0, "y": 0, "size": 256 }];
+                        drawTiles();
+                    });
+            }
+
+            window.addEventListener('wheel', handleScroll);
+            document.getElementById('fileInput').addEventListener('change', handleFileUpload);
+
+
+        }
+    </script>
+</head>
+
+<body>
+    <input type="file" id="fileInput">
+    <br>
+    <canvas id="myCanvas" width="800" height="600"></canvas>
+</body>
+
+</html>
