@@ -189,6 +189,9 @@
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 const sortedTiles = filterVisibleTiles().sort((a, b) => b.size - a.size);
 
+
+                let showBorders = document.getElementById("showBorders").checked;
+
                 sortedTiles.forEach(tile => {
                     const tileKey = `${tile.x},${tile.y},${tile.size}`;
 
@@ -197,8 +200,10 @@
                         const img = imageCache.get(tileKey);
                         drawImage(img, tile);
                         //for debuggin, draw a red border around the tile
-                        ctx.strokeStyle = "red";
-                        ctx.strokeRect((tile.x * camera.zoom) - camera.x, (tile.y * camera.zoom) - camera.y, tile.size * camera.zoom, tile.size * camera.zoom);
+                        if (showBorders) {
+                            ctx.strokeStyle = "red";
+                            ctx.strokeRect((tile.x * camera.zoom) - camera.x, (tile.y * camera.zoom) - camera.y, tile.size * camera.zoom, tile.size * camera.zoom);
+                        }
 
                     } else {
                         // Decode and cache the image
@@ -206,8 +211,10 @@
                         img.onload = () => {
                             imageCache.set(tileKey, img);
                             drawImage(img, tile);
-                            ctx.strokeStyle = "red";
-                            ctx.strokeRect((tile.x * camera.zoom) - camera.x, (tile.y * camera.zoom) - camera.y, tile.size * camera.zoom, tile.size * camera.zoom);
+                            if (showBorders) {
+                                ctx.strokeStyle = "red";
+                                ctx.strokeRect((tile.x * camera.zoom) - camera.x, (tile.y * camera.zoom) - camera.y, tile.size * camera.zoom, tile.size * camera.zoom);
+                            }
                         };
                         img.src = tile.path;
                     }
@@ -265,7 +272,7 @@
 </head>
 
 <body>
-    <input type="file" id="fileInput">
+    <input type="file" id="fileInput"> Show Borders: <input type="checkbox" id="showBorders" checked>
     <br>
     <canvas id="myCanvas" width="800" height="600"></canvas>
 </body>
